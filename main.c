@@ -132,27 +132,7 @@ typedef struct Vertex_ {
 } Vertex;
 
 
- const  Vertex vertices[]=
-{
-    {{-0.5f,    -0.5f,   0.0f},     {1.0f,0.0f,0.0f},   {1.0f,0.0f}},
-    {{ 0.5f,    -0.5f,   0.0f},     {0.0f,1.0f,0.0f},   {0.0f,0.0f}},
-    {{ 0.5f,     0.5f,   0.0f},     {0.0f,0.0f,1.0f},   {0.0f,1.0f}},
-    {{-0.5f,     0.5f,   0.0f},     {1.0f,1.0f,1.0f},   {1.0f,1.0f}},
 
-
-    {{-0.5f,    -0.5f,   -0.5f},     {1.0f,0.0f,0.0f},   {1.0f,0.0f}},
-    {{ 0.5f,    -0.5f,   -0.5f},     {0.0f,1.0f,0.0f},   {0.0f,0.0f}},
-    {{ 0.5f,     0.5f,   -0.5f},     {0.0f,0.0f,1.0f},   {0.0f,1.0f}},
-    {{-0.5f,     0.5f,   -0.5f},     {1.0f,1.0f,1.0f},   {1.0f,1.0f}}
-};
-
- const uint32_t indices[] =
-{
-
-    0, 1, 2, 2, 3, 0,
-    4, 5, 6, 6, 7, 4
-
-};
 
  const VkFormat candidates[]=
 {
@@ -162,7 +142,8 @@ typedef struct Vertex_ {
 };
 
 size_t image_size;
-
+static size_t vertices_size;
+static size_t indices_size;
 
 
 typedef struct QueueFamilyIndices_{
@@ -618,6 +599,16 @@ void loadModel
     const char* model_path
 );
 
+void processMesh
+(
+    const struct aiMesh* mesh
+);
+
+void processNode
+(
+    const struct aiNode* node,
+    const struct aiScene* scene
+);
 /*Vulkan Core Header*/
 
 
@@ -1164,7 +1155,92 @@ void framebufferResizeCallback
 
 /*Vulkan Core Implementation*/
 
+void loadModel
+(
+    const char* model_path
+)
+{
+    const struct aiScene* scene = aiImportFile( model_path, aiProcess_Triangulate | aiProcess_FlipUVs | aiProcess_CalcTangentSpace );
 
+    if ( scene == NULL )
+    {
+        perror( "failed to load model!" );
+        exit( EXIT_FAILURE );
+    }
+
+    processNode( scene->mRootNode, scene );
+    aiReleaseImport( scene );
+};
+
+void processMesh
+(
+    const struct aiMesh* mesh
+)
+{
+    // Print the number of vertices and faces
+    printf("Mesh has %d vertices and %d faces\n", mesh->mNumVertices, mesh->mNumFaces);
+    indices_size=3*mesh->mNumFaces;
+    vertices_size=mesh->mNumVertices;
+    if(Vulk.indices==NULL)
+        Vulk.indices=(uint32_t*)calloc( indices_size , sizeof( uint32_t ) );
+    if(Vulk.vertices==NULL)
+        Vulk.vertices=(Vertex*)calloc( vertices_size , sizeof( Vertex ) );
+    // Iterate through vertices
+    for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
+        //Vertex vertex={0};
+        Vulk.vertices[i].pos[0] =(double) mesh->mVertices[i].x;
+        Vulk.vertices[i].pos[1] =(double) mesh->mVertices[i].y;
+        Vulk.vertices[i].pos[2] = (double)mesh->mVertices[i].z;
+
+        // Print texture coordinates if available
+        if (mesh->mTextureCoords[0]) {
+            Vulk.vertices[i].texCoord[0] = mesh->mTextureCoords[0][i].x;
+            Vulk.vertices[i].texCoord[1] = mesh->mTextureCoords[0][i].y;
+        }else {
+
+            Vulk.vertices[i].texCoord[0] = 0.0f;
+            Vulk.vertices[i].texCoord[1] = 0.0f;
+        }
+        Vulk.vertices[i].color[0] = 1.0f;
+        Vulk.vertices[i].color[1] = 1.0f;
+        Vulk.vertices[i].color[2] = 1.0f;
+        //printf("\n");
+        //Vulk.vertices[i]=vertex;
+    }
+
+    // Iterate through faces (triangles)
+    uint32_t curr_idx=0;
+    for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
+        struct aiFace face = mesh->mFaces[i];
+        for (unsigned int j = 0; j < face.mNumIndices; j++) {
+            printf("%d ", face.mIndices[j]);
+            Vulk.indices[3*i+j]=face.mIndices[j];
+        }
+        putchar(10);
+
+    }
+
+}
+
+void processNode
+(
+    const struct aiNode* node,
+    const struct aiScene* scene
+)
+{
+
+    // Process all meshes in this node
+    for (unsigned int i = 0; i < node->mNumMeshes; i++) {
+        struct aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
+        processMesh(mesh);
+    }
+
+    // Recursively process each child node
+    for (unsigned int i = 0; i < node->mNumChildren; i++) {
+        processNode(node->mChildren[i], scene);
+    }
+
+}
 
  VkVertexInputBindingDescription getBindingDescription
 (
@@ -1224,6 +1300,7 @@ void framebufferResizeCallback
     createTextureImage();
     createTextureImageView();
     createTextureSampler();
+    loadModel(MODEL_PATH);
     createVertexBuffer();
     createIndexBuffer();
     createUniformBuffers();
@@ -1875,8 +1952,8 @@ void createVertexBuffer
 void
 )
 {
-    size_t vertices_size = 8;
-    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices_size;
+
+    VkDeviceSize bufferSize = sizeof(Vulk.vertices[0]) * vertices_size;
 
     VkBuffer stagingBuffer = {0};
     VkDeviceMemory stagingBufferMemory = {0};
@@ -1889,7 +1966,7 @@ void
 
     void* data = NULL;
     vkMapMemory( Vulk.device, stagingBufferMemory, 0, bufferSize, 0, &data );
-    memcpy( data, vertices, (size_t)bufferSize );
+    memcpy( data, Vulk.vertices, (size_t)bufferSize );
     vkUnmapMemory( Vulk.device, stagingBufferMemory );
 
     createBuffer( bufferSize,
@@ -1910,8 +1987,8 @@ void
 void
 )
 {
-    size_t indices_size = 12;
-    VkDeviceSize bufferSize = sizeof(indices[0]) * indices_size;
+
+    VkDeviceSize bufferSize = sizeof(Vulk.indices[0]) * indices_size;
 
     VkBuffer stagingBuffer = {0};
     VkDeviceMemory stagingBufferMemory = {0};
@@ -1924,7 +2001,7 @@ void
 
     void *data = NULL;
     vkMapMemory( Vulk.device, stagingBufferMemory, 0, bufferSize, 0, &data );
-    memcpy( data, indices, (size_t)bufferSize );
+    memcpy( data, Vulk.indices, (size_t)bufferSize );
     vkUnmapMemory( Vulk.device, stagingBufferMemory );
 
     createBuffer( bufferSize,

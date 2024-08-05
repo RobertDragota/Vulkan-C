@@ -36,6 +36,7 @@ target_link_libraries(Vulkan PRIVATE
         X11
         Xxf86vm
         Xrandr
+        assimp
         Xi
         m    )
 

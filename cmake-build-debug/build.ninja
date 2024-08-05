@@ -67,7 +67,7 @@ build CMakeFiles/Vulkan.dir/main.c.o: C_COMPILER__Vulkan_unscanned_Debug /home/r
 
 build Vulkan: C_EXECUTABLE_LINKER__Vulkan_Debug CMakeFiles/Vulkan.dir/main.c.o
   FLAGS = -g
-  LINK_LIBRARIES = -lglfw  -lvulkan  -ldl  -lpthread  -lX11  -lXxf86vm  -lXrandr  -lXi  -lm
+  LINK_LIBRARIES = -lglfw  -lvulkan  -ldl  -lpthread  -lX11  -lXxf86vm  -lXrandr  -lassimp  -lXi  -lm
   OBJECT_DIR = CMakeFiles/Vulkan.dir
   POST_BUILD = :
   PRE_LINK = :
