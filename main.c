@@ -2,17 +2,18 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #define GLM_FORCE_DEPTH_ZERO_TO_ONE
-#include <stdbool.h>
 #include "cglm/cglm.h"
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdalign.h>
 #include <assimp/cimport.h>
 #include <assimp/scene.h>
 #include <assimp/postprocess.h>
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb_image.h>
 
+//#define max(a,b) ((a>b)?a:b)
 /*Utility Header*/
 
 char* readFile
@@ -38,7 +39,8 @@ char* readFile
     size_t* size
 )
 {
-    FILE* file = fopen( filename, "rb" );
+    FILE* file =NULL;
+    fopen_s( &file, filename, "rb" );
 
     if ( file == NULL )
     {
@@ -50,7 +52,7 @@ char* readFile
     *size = ftell( file );
     rewind( file );
 
-    char* buffer = (char*)malloc( *size * sizeof( char ) );
+    char* buffer = (char*) malloc( *size * sizeof( char ) );
     if ( buffer == NULL )
     {
         perror( "Failed to allocate memory" );
@@ -58,7 +60,12 @@ char* readFile
         exit( EXIT_FAILURE );
     }
 
-    fread( buffer, sizeof( char ), *size, file );
+    if( fread( buffer, sizeof( char ), *size, file ) < 0)
+    {
+        perror( "Failed to read file" );
+        fclose( file );
+        exit( EXIT_FAILURE );
+    }
     fclose( file );
 
     return ( buffer );
@@ -126,13 +133,21 @@ typedef struct Vertex_ {
    vec3 pos;
    vec3 color;
    vec2 texCoord;
-
-   VkVertexInputBindingDescription (*getBindingDescription)();
-   VkVertexInputAttributeDescription* (*getAttributeDescriptions)();
 } Vertex;
 
+typedef struct Mesh_{
 
+    Vertex* vertices_array;
+    uint32_t* indices_arry;
 
+    uint32_t vertices_count;
+    uint32_t index_count;
+
+}Mesh;
+
+Mesh* meshes;
+
+uint32_t mesh_size;
 
  const VkFormat candidates[]=
 {
@@ -162,9 +177,9 @@ typedef struct SwapChainSupportDetails_{
 
 typedef struct  UniformBufferObjects_{
 
-    _Alignas(16) mat4 model;
-    _Alignas(16) mat4 view;
-    _Alignas(16) mat4 proj;
+    __declspec(align(16)) mat4 model;
+    __declspec(align(16)) mat4 view;
+    __declspec(align(16)) mat4 proj;
 
 }UniformBufferObjects;
 
@@ -204,6 +219,7 @@ typedef struct  VulkObj_{
     void** uniformBuffersMapped;
     VkDescriptorPool descriptorPool;
     VkDescriptorSet* descriptorSets;
+    uint32_t mipLevels;
     VkImage textureImage;
     VkDeviceMemory textureImageMemory;
     VkImageView textureImageView;
@@ -211,53 +227,14 @@ typedef struct  VulkObj_{
     VkImage depthImage;
     VkDeviceMemory depthImageMemory;
     VkImageView depthImageView;
+    VkSampleCountFlagBits msaaSmples;
+    VkImage colorImage;
+    VkDeviceMemory colorImageMemory;
+    VkImageView colorImageView;
 
 }VulkObj;
 
- VulkObj Vulk={
-    .window=NULL,
-    .instance=0,
-    .physicalDevice=0,
-    .device=0,
-    .graphicsQueue=0,
-    .presentQueue=0,
-    .surface=0,
-    .swapChain=0,
-    .swapChainImages=NULL,
-    .swapChainImageFormat=0,
-    .swapChainExtent=0,
-    .swapChainImages=NULL,
-    .descriptorSetLayout=0,
-    .pipelineLayout=0,
-    .renderPass=0,
-    .graphicsPipeline=0,
-    .swapChainFramebuffers=NULL,
-    .commandPool=0,
-    .commandBuffers=NULL,
-    .imageAvailableSemaphores=NULL,
-    .renderFinishedSemaphores=NULL,
-    .inFlightFences=NULL,
-    .framebufferResized=false,
-    .vertexBuffer=0,
-    .vertexBufferMemory=0,
-    .indexBuffer=0,
-    .indexBufferMemory=0,
-    .uniformBuffers=NULL,
-    .uniformBuffersMemory=NULL,
-    .uniformBuffersMapped=NULL,
-    .descriptorPool=0,
-    .descriptorSets=NULL,
-    .textureImage=0,
-    .textureImageMemory=0,
-    .textureImageView=0,
-    .textureSampler=0,
-    .depthImage=0,
-    .depthImageMemory=0,
-    .depthImageView=0,
-    .vertices=NULL,
-    .indices=NULL
-};
-
+VulkObj Vulk= {.msaaSmples=VK_SAMPLE_COUNT_1_BIT};
 
 bool isComplete
 (
@@ -355,7 +332,8 @@ void transitionImageLayout
     VkImage image,
     VkFormat format,
     VkImageLayout oldLayout,
-    VkImageLayout newLayout
+    VkImageLayout newLayout,
+    uint32_t mipLevels
 );
 
 
@@ -396,13 +374,8 @@ VkVertexInputBindingDescription getBindingDescription
     void
 );
 
-Vertex Vert={
-    .color=0,
-    .pos=0,
-    .texCoord=0,
-    .getBindingDescription=getBindingDescription,
-    .getAttributeDescriptions=getAttributeDescriptions
-};
+
+
 
 void mainLoop
 (
@@ -491,12 +464,12 @@ void drawFrame
 
  void createVertexBuffer
 (
-    void
+    uint32_t index
 );
 
  void createIndexBuffer
 (
-    void
+    uint32_t index
 );
 
  void createDescriptorSetLayout
@@ -567,6 +540,8 @@ void drawFrame
 (
     uint32_t width,
     uint32_t height,
+    uint32_t mipLevels,
+    VkSampleCountFlagBits numSamples,
     VkFormat format,
     VkImageTiling tiling,
     VkImageUsageFlags usage,
@@ -585,7 +560,8 @@ void drawFrame
 (
   VkImage image,
   VkFormat format,
-  VkImageAspectFlags aspectFlags
+  VkImageAspectFlags aspectFlags,
+  uint32_t mipLevels
 );
 
  VkPresentModeKHR chooseSwapPresentMode
@@ -601,13 +577,34 @@ void loadModel
 
 void processMesh
 (
-    const struct aiMesh* mesh
+    const struct aiMesh* assimp_mesh,
+    Mesh* mesh
 );
 
 void processNode
 (
     const struct aiNode* node,
-    const struct aiScene* scene
+    const struct aiScene* scene,
+    Mesh* mesh
+);
+
+void generateMipmaps
+(
+    VkImage image,
+    VkFormat imageFormat,
+    int32_t texWidth,
+    int32_t texHeight,
+    uint32_t mipLevels
+);
+
+VkSampleCountFlagBits getMaxUsableSampleCount
+(
+    void
+);
+
+void createColorResources
+(
+    void
 );
 /*Vulkan Core Header*/
 
@@ -618,7 +615,7 @@ double get_current_time_seconds
     void
 )
 {
-    return glfwGetTime();
+    return sin(-glfwGetTime())*sin(glfwGetTime());
 }
 
 bool isComplete
@@ -912,7 +909,7 @@ VkFormat findDepthFormat
 
 VkFormat findSupportedFormat
 (
-    const VkFormat candidates[],
+    const VkFormat _candidates[],
     size_t candidates_size,
     VkImageTiling tiling,
     VkFormatFeatureFlags features
@@ -921,15 +918,15 @@ VkFormat findSupportedFormat
     for (size_t i = 0; i < candidates_size; ++i)
     {
         VkFormatProperties props = {0};
-        vkGetPhysicalDeviceFormatProperties( Vulk.physicalDevice, candidates[i], &props );
+        vkGetPhysicalDeviceFormatProperties( Vulk.physicalDevice, _candidates[i], &props );
 
         if ( tiling == VK_IMAGE_TILING_LINEAR && (props.linearTilingFeatures & features) == features )
         {
-            return ( candidates[i] );
+            return ( _candidates[i] );
         }
         else if ( tiling == VK_IMAGE_TILING_OPTIMAL && (props.optimalTilingFeatures & features) == features )
         {
-            return ( candidates[i] );
+            return ( _candidates[i] );
         }
     }
 
@@ -1028,7 +1025,8 @@ void transitionImageLayout
     VkImage image,
     VkFormat format,
     VkImageLayout oldLayout,
-    VkImageLayout newLayout
+    VkImageLayout newLayout,
+    uint32_t mipLevels
 )
 {
     VkCommandBuffer commandBuffer = beginSingleTimeCommands();
@@ -1042,7 +1040,7 @@ void transitionImageLayout
     barrier.image = image;
     barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     barrier.subresourceRange.baseMipLevel = 0;
-    barrier.subresourceRange.levelCount = 1;
+    barrier.subresourceRange.levelCount = mipLevels;
     barrier.subresourceRange.baseArrayLayer = 0;
     barrier.subresourceRange.layerCount = 1;
 
@@ -1089,7 +1087,13 @@ void transitionImageLayout
     endSingleTimeCommands( commandBuffer );
 }
 
-
+ vec3 cameraPos = {2.0f, 2.0f, 2.0f}; // cameraPos
+ vec3 cameraFront = {0.0f, -1.0f, -1.0f};
+ vec3 cameraUp = {0.0f, 0.0f, 1.0f}; // cameraUp
+ vec3 center = {0.0f, 0.0f, 0.0f};
+ vec3 z_axis = {0.0f, 0.0f, 1.0f};
+ vec3 y_axis = {0.0f, 1.0f, 0.0f};
+ vec3 x_axis = {1.0f, 0.0f, 0.0f};
 void updateUniformBuffer
 (
     uint32_t currentImage
@@ -1105,16 +1109,58 @@ void updateUniformBuffer
     double currentTime = get_current_time_seconds();
     float time = (float)(currentTime - startTime);
 
-    UniformBufferObjects ubo = {0};
-    vec3 axis = {0.0f, 0.0f, 1.0f};
-    vec3 eye = {2.0f, 2.0f, 2.0f};
-    vec3 center = {0.0f, 0.0f, 0.0f};
-    vec3 up = {0.0f, 0.0f, 1.0f};
+    static UniformBufferObjects ubo = {.model = GLM_MAT4_IDENTITY_INIT};
+    //glm_mat4_identity( ubo.model );
 
-    glm_mat4_identity( ubo.model );
-    glm_rotate( ubo.model, 3 * time * glm_rad(60.0f), axis );
-    glm_lookat( eye, center, up, ubo.view );
-    glm_perspective( glm_rad( 45.0f ), Vulk.swapChainExtent.width / (float)Vulk.swapChainExtent.height, 0.1f, 10.0f, ubo.proj );
+    float cameraSpeed = 0.005f;
+    vec3 tempVec;
+    // Forward movement
+    if (glfwGetKey(Vulk.window, GLFW_KEY_W) == GLFW_PRESS)
+    {
+        glm_vec3_scale(cameraFront, cameraSpeed, tempVec);
+        glm_vec3_add(cameraPos, tempVec, cameraPos);
+    }
+
+    // Backward movement
+    if (glfwGetKey(Vulk.window, GLFW_KEY_S) == GLFW_PRESS)
+    {
+        glm_vec3_scale(cameraFront, cameraSpeed, tempVec);
+        glm_vec3_sub(cameraPos, tempVec, cameraPos);
+    }
+
+    // Left movement (Strafe left)
+    if (glfwGetKey(Vulk.window, GLFW_KEY_A) == GLFW_PRESS)
+    {
+        glm_vec3_cross(cameraFront, cameraUp, tempVec); // Calculate the right vector
+        glm_normalize(tempVec);
+        glm_vec3_scale(tempVec, cameraSpeed, tempVec); // Scale it by the camera speed
+        glm_vec3_sub(cameraPos, tempVec, cameraPos);   // Subtract it from the camera position
+    }
+
+    // Right movement (Strafe right)
+    if (glfwGetKey(Vulk.window, GLFW_KEY_D) == GLFW_PRESS)
+    {
+        glm_vec3_cross(cameraFront, cameraUp, tempVec); // Calculate the right vector
+        glm_normalize(tempVec);
+        glm_vec3_scale(tempVec, cameraSpeed, tempVec); // Scale it by the camera speed
+        glm_vec3_add(cameraPos, tempVec, cameraPos);   // Add it to the camera position
+    }
+
+    if ( glfwGetKey(Vulk.window , GLFW_KEY_Z) == GLFW_PRESS )
+    {
+        glm_rotate( ubo.model,  glm_rad(1.0f), z_axis );
+    }
+    if ( glfwGetKey(Vulk.window , GLFW_KEY_Y) == GLFW_PRESS )
+    {
+        glm_rotate( ubo.model,  glm_rad(1.0f), y_axis );
+    }
+    if ( glfwGetKey(Vulk.window , GLFW_KEY_X) == GLFW_PRESS )
+    {
+        glm_rotate( ubo.model,  glm_rad(1.0f), x_axis );
+    }
+    glm_vec3_add(cameraPos,cameraFront,center);
+    glm_lookat( cameraPos, center, cameraUp, ubo.view );
+    glm_perspective( 20.0f, Vulk.swapChainExtent.width / (float)Vulk.swapChainExtent.height, 0.1f, 10.0f, ubo.proj );
 
     ubo.proj[1][1] *= -1;
 
@@ -1147,13 +1193,148 @@ void framebufferResizeCallback
 )
 {
 
-    VulkObj * app = ( VulkObj*)glfwGetWindowUserPointer( window );
+    VulkObj * app = ( VulkObj* )glfwGetWindowUserPointer( window );
     app->framebufferResized = true;
 
 }
 /*Vulkan Utility Implementation*/
 
 /*Vulkan Core Implementation*/
+void createColorResources
+(
+    void
+)
+{
+    VkFormat colorFormat = Vulk.swapChainImageFormat;
+
+    createImage( Vulk.swapChainExtent.width, Vulk.swapChainExtent.height, 1, Vulk.msaaSmples , colorFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &Vulk.colorImage, &Vulk.colorImageMemory);
+    Vulk.colorImageView = createImageView( Vulk.colorImage, colorFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1);
+}
+VkSampleCountFlagBits getMaxUsableSampleCount
+(
+    void
+)
+{
+    VkPhysicalDeviceProperties physicalDeviceProperties;
+    vkGetPhysicalDeviceProperties(Vulk.physicalDevice, &physicalDeviceProperties);
+
+    VkSampleCountFlags counts = physicalDeviceProperties.limits.framebufferColorSampleCounts & physicalDeviceProperties.limits.framebufferDepthSampleCounts;
+
+    if (counts & VK_SAMPLE_COUNT_64_BIT) { return VK_SAMPLE_COUNT_64_BIT; }
+    if (counts & VK_SAMPLE_COUNT_32_BIT) { return VK_SAMPLE_COUNT_32_BIT; }
+    if (counts & VK_SAMPLE_COUNT_16_BIT) { return VK_SAMPLE_COUNT_16_BIT; }
+    if (counts & VK_SAMPLE_COUNT_8_BIT) { return VK_SAMPLE_COUNT_8_BIT; }
+    if (counts & VK_SAMPLE_COUNT_4_BIT) { return VK_SAMPLE_COUNT_4_BIT; }
+    if (counts & VK_SAMPLE_COUNT_2_BIT) { return VK_SAMPLE_COUNT_2_BIT; }
+
+    return VK_SAMPLE_COUNT_1_BIT;
+
+}
+
+void generateMipmaps
+(
+    VkImage image,
+    VkFormat imageFormat,
+    int32_t texWidth,
+    int32_t texHeight,
+    uint32_t mipLevels
+)
+{
+    VkFormatProperties formatProperties;
+    vkGetPhysicalDeviceFormatProperties(Vulk.physicalDevice,imageFormat,&formatProperties);
+
+    if (!(formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_FILTER_LINEAR_BIT))
+    {
+        perror("texture image format does not support linear blitting");
+        exit(EXIT_FAILURE);
+    }
+    VkCommandBuffer commandBuffer = beginSingleTimeCommands();
+
+    VkImageMemoryBarrier barrier = {0};
+    barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+    barrier.image = image;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    barrier.subresourceRange.baseArrayLayer = 0;
+    barrier.subresourceRange.layerCount = 1;
+    barrier.subresourceRange.levelCount = 1;
+   // endSingleTimeCommands(commandBuffer);
+
+    int32_t mipWidth = texWidth;
+    int32_t mipHeight = texHeight;
+
+    for(uint32_t i = 1 ; i < Vulk.mipLevels ; ++i)
+    {
+           barrier.subresourceRange.baseMipLevel = i - 1;
+           barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+           barrier.newLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+           barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+           barrier.dstAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+
+        vkCmdPipelineBarrier(commandBuffer,
+                            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,
+                            0, NULL,
+                            0, NULL,
+                            1, &barrier);
+
+        VkImageBlit blit = {0};
+        blit.srcOffsets[0].x = 0;
+        blit.srcOffsets[0].y = 0;
+        blit.srcOffsets[0].z = 0;
+        blit.srcOffsets[1].x = mipWidth;
+        blit.srcOffsets[1].y = mipHeight;
+        blit.srcOffsets[1].z = 1;
+        blit.srcSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.srcSubresource.mipLevel = i - 1;
+        blit.srcSubresource.baseArrayLayer = 0;
+        blit.srcSubresource.layerCount = 1;
+        blit.dstOffsets[0].x = 0;
+        blit.dstOffsets[0].y = 0;
+        blit.dstOffsets[0].z = 0;
+        blit.dstOffsets[1].x = mipWidth>1 ? mipWidth/2 : 1;
+        blit.dstOffsets[1].y = mipHeight>1 ? mipHeight/2 : 1;
+        blit.dstOffsets[1].z = 1;
+        blit.dstSubresource.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        blit.dstSubresource.mipLevel = i;
+        blit.dstSubresource.baseArrayLayer = 0;
+        blit.dstSubresource.layerCount = 1;
+
+        vkCmdBlitImage(commandBuffer,
+                        image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+                        image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        1, &blit,
+                        VK_FILTER_LINEAR);
+
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_READ_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(commandBuffer,
+                VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                0, NULL,
+                0, NULL,
+                1, &barrier);
+            if(mipWidth > 1) mipWidth /= 2;
+            if(mipHeight > 1) mipHeight /= 2;
+
+
+    }
+      barrier.subresourceRange.baseMipLevel = mipLevels - 1;
+            barrier.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+            barrier.newLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+            barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+            barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+
+            vkCmdPipelineBarrier(commandBuffer,
+                 VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0,
+                 0, NULL,
+                 0, NULL,
+                 1, &barrier);
+
+    endSingleTimeCommands(commandBuffer);
+}
 
 void loadModel
 (
@@ -1167,80 +1348,93 @@ void loadModel
         perror( "failed to load model!" );
         exit( EXIT_FAILURE );
     }
-
-    processNode( scene->mRootNode, scene );
+    meshes = (Mesh*)calloc(scene->mNumMeshes,sizeof(Mesh));
+    mesh_size = scene->mNumMeshes;
+    processNode( scene->mRootNode, scene,meshes );
     aiReleaseImport( scene );
 };
-
-void processMesh
-(
-    const struct aiMesh* mesh
-)
-{
-    // Print the number of vertices and faces
-    printf("Mesh has %d vertices and %d faces\n", mesh->mNumVertices, mesh->mNumFaces);
-    indices_size=3*mesh->mNumFaces;
-    vertices_size=mesh->mNumVertices;
-    if(Vulk.indices==NULL)
-        Vulk.indices=(uint32_t*)calloc( indices_size , sizeof( uint32_t ) );
-    if(Vulk.vertices==NULL)
-        Vulk.vertices=(Vertex*)calloc( vertices_size , sizeof( Vertex ) );
-    // Iterate through vertices
-    for (unsigned int i = 0; i < mesh->mNumVertices; i++) {
-        //Vertex vertex={0};
-        Vulk.vertices[i].pos[0] =(double) mesh->mVertices[i].x;
-        Vulk.vertices[i].pos[1] =(double) mesh->mVertices[i].y;
-        Vulk.vertices[i].pos[2] = (double)mesh->mVertices[i].z;
-
-        // Print texture coordinates if available
-        if (mesh->mTextureCoords[0]) {
-            Vulk.vertices[i].texCoord[0] = mesh->mTextureCoords[0][i].x;
-            Vulk.vertices[i].texCoord[1] = mesh->mTextureCoords[0][i].y;
-        }else {
-
-            Vulk.vertices[i].texCoord[0] = 0.0f;
-            Vulk.vertices[i].texCoord[1] = 0.0f;
-        }
-        Vulk.vertices[i].color[0] = 1.0f;
-        Vulk.vertices[i].color[1] = 1.0f;
-        Vulk.vertices[i].color[2] = 1.0f;
-        //printf("\n");
-        //Vulk.vertices[i]=vertex;
-    }
-
-    // Iterate through faces (triangles)
-    uint32_t curr_idx=0;
-    for (unsigned int i = 0; i < mesh->mNumFaces; i++) {
-        struct aiFace face = mesh->mFaces[i];
-        for (unsigned int j = 0; j < face.mNumIndices; j++) {
-            printf("%d ", face.mIndices[j]);
-            Vulk.indices[3*i+j]=face.mIndices[j];
-        }
-        putchar(10);
-
-    }
-
-}
 
 void processNode
 (
     const struct aiNode* node,
-    const struct aiScene* scene
+    const struct aiScene* scene,
+    Mesh* mesh
 )
 {
 
     // Process all meshes in this node
     for (unsigned int i = 0; i < node->mNumMeshes; i++) {
-        struct aiMesh* mesh = scene->mMeshes[node->mMeshes[i]];
-        processMesh(mesh);
+        struct aiMesh* assimp_mesh = scene->mMeshes[node->mMeshes[i]];
+        processMesh(assimp_mesh,&mesh[i]);
     }
 
     // Recursively process each child node
     for (unsigned int i = 0; i < node->mNumChildren; i++) {
-        processNode(node->mChildren[i], scene);
+        processNode(node->mChildren[i], scene, meshes);
     }
 
 }
+
+void processMesh
+(
+    const struct aiMesh* assimp_mesh,
+    Mesh* mesh
+)
+{
+    // Print the number of vertices and faces
+    printf("Mesh has %d vertices and %d faces\n", assimp_mesh->mNumVertices, assimp_mesh->mNumFaces);
+    memset( mesh, 0, sizeof(Mesh) );
+    mesh->vertices_count=assimp_mesh->mNumVertices;
+    mesh->vertices_array=(Vertex*)calloc( mesh->vertices_count , sizeof( Vertex ) );
+
+
+
+    indices_size=3*assimp_mesh->mNumFaces;
+    vertices_size=assimp_mesh->mNumVertices;
+
+
+
+    // Iterate through vertices
+    for (unsigned int i = 0; i < assimp_mesh->mNumVertices; i++) {
+        //Vertex vertex={0};
+        mesh->vertices_array[i].pos[0] = assimp_mesh->mVertices[i].x;
+        mesh->vertices_array[i].pos[1] = assimp_mesh->mVertices[i].y;
+        mesh->vertices_array[i].pos[2] = assimp_mesh->mVertices[i].z;
+
+        // Print texture coordinates if available
+        if (assimp_mesh->mTextureCoords[0]) {
+            mesh->vertices_array[i].texCoord[0] = assimp_mesh->mTextureCoords[0][i].x;
+            mesh->vertices_array[i].texCoord[1] =assimp_mesh->mTextureCoords[0][i].y;
+        }else {
+
+            mesh->vertices_array[i].texCoord[0] = 0.0f;
+            mesh->vertices_array[i].texCoord[1] = 0.0f;
+        }
+        mesh->vertices_array[i].color[0] = 1.0f;
+        mesh->vertices_array[i].color[1] = 1.0f;
+        mesh->vertices_array[i].color[2] = 1.0f;
+
+        //printf("\n");
+        //Vulk.vertices[i]=vertex;
+    }
+
+    mesh->index_count = assimp_mesh->mNumFaces * assimp_mesh->mFaces[ 0 ].mNumIndices;
+    mesh->indices_arry = (uint32_t*)calloc( mesh->index_count , sizeof( uint32_t ) );
+    // Iterate through faces (triangles)
+
+    for (unsigned int i = 0; i < assimp_mesh->mNumFaces; i++) {
+        struct aiFace face = assimp_mesh->mFaces[i];
+        for (unsigned int j = 0; j < face.mNumIndices; j++) {
+           // printf("%d ", face.mIndices[j]);
+            mesh->indices_arry[3*i + j]=face.mIndices[j];
+        }
+       // putchar(10);
+
+    }
+
+}
+
+
 
  VkVertexInputBindingDescription getBindingDescription
 (
@@ -1294,6 +1488,7 @@ void processNode
     createRenderPass();
     createDescriptorSetLayout();
     createGraphicsPipeline();
+    createColorResources();
     createDepthResources();
     createFramebuffers();
     createCommandPool();
@@ -1301,8 +1496,12 @@ void processNode
     createTextureImageView();
     createTextureSampler();
     loadModel(MODEL_PATH);
-    createVertexBuffer();
-    createIndexBuffer();
+
+    for(uint32_t i = 0; i < mesh_size ; ++i){
+    createVertexBuffer(i);
+    createIndexBuffer(i);
+    }
+
     createUniformBuffers();
     createDescriptorPool();
     createDescriptorSets();
@@ -1403,7 +1602,7 @@ void creatInstance
 
 void createSurface()
 {
-    VkResult res = VK_SUCCESS;
+
 
     if ( glfwCreateWindowSurface(Vulk.instance, Vulk.window, NULL, &Vulk.surface) != VK_SUCCESS )
     {
@@ -1451,6 +1650,7 @@ void pickPhysicalDevice
            {
 
                Vulk.physicalDevice = devices[i];
+               Vulk.msaaSmples = getMaxUsableSampleCount();
                break;
 
            }
@@ -1475,7 +1675,7 @@ void createRenderPass
 
     VkAttachmentDescription depthAttachment = {0};
     depthAttachment.format = findDepthFormat();
-    depthAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    depthAttachment.samples = Vulk.msaaSmples;
     depthAttachment.loadOp =  VK_ATTACHMENT_LOAD_OP_CLEAR;
     depthAttachment.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     depthAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
@@ -1485,13 +1685,28 @@ void createRenderPass
 
     VkAttachmentDescription colorAttachment = {0};
     colorAttachment.format = Vulk.swapChainImageFormat;
-    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachment.samples = Vulk.msaaSmples;
     colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
     colorAttachment.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
     colorAttachment.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
     colorAttachment.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
-    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+    colorAttachment.finalLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkAttachmentDescription colorAttachmentResolve = {0};
+    colorAttachmentResolve.format = Vulk.swapChainImageFormat;
+    colorAttachmentResolve.samples = VK_SAMPLE_COUNT_1_BIT;
+    colorAttachmentResolve.loadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachmentResolve.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
+    colorAttachmentResolve.stencilLoadOp = VK_ATTACHMENT_LOAD_OP_DONT_CARE;
+    colorAttachmentResolve.stencilStoreOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+    colorAttachmentResolve.initialLayout =VK_IMAGE_LAYOUT_UNDEFINED;
+    colorAttachmentResolve.finalLayout = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR;
+
+
+    VkAttachmentReference colorAttachmentResolveRef = {0};
+    colorAttachmentResolveRef.attachment = 2;
+    colorAttachmentResolveRef.layout =VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
 
     VkAttachmentReference depthAttachmentRef = {0};
     depthAttachmentRef.attachment = 1;
@@ -1506,12 +1721,14 @@ void createRenderPass
     subpass.colorAttachmentCount = 1;
     subpass.pColorAttachments = &colorAttachmentRef;
     subpass.pDepthStencilAttachment = &depthAttachmentRef;
+    subpass.pResolveAttachments = &colorAttachmentResolveRef;
 
-    VkAttachmentDescription* attachments = (VkAttachmentDescription*)calloc( 2, sizeof( VkAttachmentDescription ) );
+    VkAttachmentDescription* attachments = (VkAttachmentDescription*)calloc( 3, sizeof( VkAttachmentDescription ) );
     attachments[0] = colorAttachment;
     attachments[1] = depthAttachment;
+    attachments[2] = colorAttachmentResolve;
 
-    size_t attachments_size = 2;
+    size_t attachments_size = 3;
 
     VkRenderPassCreateInfo renderPassInfo = {0};
     renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
@@ -1525,7 +1742,7 @@ void createRenderPass
     dependency.dstSubpass = VK_SUBPASS_EXTERNAL;
     dependency.dstSubpass = 0;
     dependency.srcStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-    dependency.srcAccessMask = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+    dependency.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
     dependency.dstStageMask = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT;
     dependency.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
@@ -1549,7 +1766,7 @@ void createImageViews
     for(size_t i = 0; i < image_size; ++i)
     {
 
-      Vulk.swapChainImageViews[i] = createImageView( Vulk.swapChainImages[i], Vulk.swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT );
+      Vulk.swapChainImageViews[i] = createImageView( Vulk.swapChainImages[i], Vulk.swapChainImageFormat, VK_IMAGE_ASPECT_COLOR_BIT, 1 );
 
     }
 
@@ -1567,10 +1784,13 @@ void createFramebuffers
 
         VkImageView attachments[]=
         {
-            Vulk.swapChainImageViews[i],
-            Vulk.depthImageView
+
+            Vulk.colorImageView,
+            Vulk.depthImageView,
+            Vulk.swapChainImageViews[i]
+
         };
-        size_t attachment_size = 2;
+        size_t attachment_size = 3;
         VkFramebufferCreateInfo framebufferInfo = {0};
         framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
         framebufferInfo.renderPass = Vulk.renderPass;
@@ -1630,7 +1850,8 @@ void
 
     size_t queueCreateInfos_size = 2;
     VkPhysicalDeviceFeatures deviceFeatures = {0};
-    deviceFeatures.samplerAnisotropy=VK_TRUE;
+    deviceFeatures.samplerAnisotropy = VK_TRUE;
+    deviceFeatures.sampleRateShading = VK_TRUE;
     uint32_t deviceExtensions_size = 1;
     VkDeviceCreateInfo createInfo = {0};
     createInfo.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -1719,8 +1940,8 @@ void
     dynamicState.pDynamicStates = dynamicStates;
 
 
-    VkVertexInputBindingDescription bindingDescription = Vert.getBindingDescription();
-    VkVertexInputAttributeDescription* attributeDescriptions = Vert.getAttributeDescriptions();
+    VkVertexInputBindingDescription bindingDescription = getBindingDescription();
+    VkVertexInputAttributeDescription* attributeDescriptions = getAttributeDescriptions();
     uint32_t attr_size = 3;
 
 
@@ -1774,9 +1995,9 @@ void
 
     VkPipelineMultisampleStateCreateInfo multisampling = {0};
     multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
-    multisampling.sampleShadingEnable = VK_FALSE;
-    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
-    multisampling.minSampleShading = 1.0f;
+    multisampling.sampleShadingEnable = VK_TRUE;
+    multisampling.rasterizationSamples = Vulk.msaaSmples;
+    multisampling.minSampleShading = .2f;
     multisampling.pSampleMask = NULL;
     multisampling.alphaToCoverageEnable = VK_FALSE;
     multisampling.alphaToOneEnable = VK_FALSE;
@@ -1949,11 +2170,11 @@ void
 
 void createVertexBuffer
 (
-void
+    uint32_t index
 )
 {
 
-    VkDeviceSize bufferSize = sizeof(Vulk.vertices[0]) * vertices_size;
+    VkDeviceSize bufferSize = sizeof(meshes[index].vertices_array[0]) * meshes[index].vertices_count;
 
     VkBuffer stagingBuffer = {0};
     VkDeviceMemory stagingBufferMemory = {0};
@@ -1966,7 +2187,7 @@ void
 
     void* data = NULL;
     vkMapMemory( Vulk.device, stagingBufferMemory, 0, bufferSize, 0, &data );
-    memcpy( data, Vulk.vertices, (size_t)bufferSize );
+    memcpy( data, meshes[index].vertices_array, (size_t)bufferSize );
     vkUnmapMemory( Vulk.device, stagingBufferMemory );
 
     createBuffer( bufferSize,
@@ -1984,11 +2205,11 @@ void
 
  void createIndexBuffer
 (
-void
+    uint32_t index
 )
 {
 
-    VkDeviceSize bufferSize = sizeof(Vulk.indices[0]) * indices_size;
+    VkDeviceSize bufferSize = sizeof(meshes[index].indices_arry[0]) * meshes[index].index_count;
 
     VkBuffer stagingBuffer = {0};
     VkDeviceMemory stagingBufferMemory = {0};
@@ -2001,7 +2222,7 @@ void
 
     void *data = NULL;
     vkMapMemory( Vulk.device, stagingBufferMemory, 0, bufferSize, 0, &data );
-    memcpy( data, Vulk.indices, (size_t)bufferSize );
+    memcpy( data, meshes[index].indices_arry, (size_t)bufferSize );
     vkUnmapMemory( Vulk.device, stagingBufferMemory );
 
     createBuffer( bufferSize,
@@ -2190,6 +2411,7 @@ void
 {
     int texWidth = 0, texHeight = 0, texChannels = 0;
     stbi_uc* pixels = stbi_load( TEXTURE_PATH, &texWidth, &texHeight, &texChannels, STBI_rgb_alpha );
+    Vulk.mipLevels = (uint32_t)floor(log2(max(texWidth,texHeight))) + 1 ;
 
     VkDeviceSize imageSize = texWidth * texHeight * 4;
 
@@ -2211,14 +2433,15 @@ void
 
     stbi_image_free( pixels );
 
-    createImage( texWidth, texHeight, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &Vulk.textureImage, &Vulk.textureImageMemory );
+    createImage( texWidth, texHeight, Vulk.mipLevels, VK_SAMPLE_COUNT_1_BIT, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &Vulk.textureImage, &Vulk.textureImageMemory );
 
-    transitionImageLayout( Vulk.textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL );
+    transitionImageLayout( Vulk.textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, Vulk.mipLevels );
     copyBufferToImage( stagingBuffer, Vulk.textureImage, (uint32_t)texWidth, (uint32_t)texHeight );
-    transitionImageLayout( Vulk.textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL );
+   // transitionImageLayout( Vulk.textureImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, Vulk.mipLevels );
 
     vkDestroyBuffer( Vulk.device, stagingBuffer, NULL );
     vkFreeMemory( Vulk.device, stagingBufferMemory, NULL );
+    generateMipmaps(Vulk.textureImage, VK_FORMAT_R8G8B8A8_SRGB, texWidth, texHeight, Vulk.mipLevels);
 }
 
 
@@ -2246,7 +2469,7 @@ void
     samplerInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_LINEAR;
     samplerInfo.mipLodBias = 0.0f;
     samplerInfo.minLod = 0.0f;
-    samplerInfo.maxLod = 0.0f;
+    samplerInfo.maxLod = VK_LOD_CLAMP_NONE;
 
     if( vkCreateSampler( Vulk.device, &samplerInfo, NULL, &Vulk.textureSampler ) != VK_SUCCESS )
     {
@@ -2262,8 +2485,8 @@ void createDepthResources
 )
 {
         VkFormat depthFormat = findDepthFormat();
-        createImage( Vulk.swapChainExtent.width, Vulk.swapChainExtent.height, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &Vulk.depthImage, &Vulk.depthImageMemory);
-        Vulk.depthImageView = createImageView( Vulk.depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT );
+        createImage( Vulk.swapChainExtent.width, Vulk.swapChainExtent.height, 1, Vulk.msaaSmples, depthFormat, VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &Vulk.depthImage, &Vulk.depthImageMemory);
+        Vulk.depthImageView = createImageView( Vulk.depthImage, depthFormat, VK_IMAGE_ASPECT_DEPTH_BIT,1 );
 }
 
 void createUniformBuffers
@@ -2291,7 +2514,7 @@ void createUniformBuffers
 )
 {
 
-     Vulk.textureImageView=createImageView(Vulk.textureImage,VK_FORMAT_R8G8B8A8_SRGB,VK_IMAGE_ASPECT_COLOR_BIT);
+     Vulk.textureImageView=createImageView(Vulk.textureImage,VK_FORMAT_R8G8B8A8_SRGB,VK_IMAGE_ASPECT_COLOR_BIT, Vulk.mipLevels);
 
 }
 
@@ -2300,6 +2523,10 @@ void createUniformBuffers
     void
 )
 {
+
+    vkDestroyImageView( Vulk.device, Vulk.colorImageView, NULL );
+    vkDestroyImage( Vulk.device, Vulk.colorImage, NULL );
+    vkFreeMemory( Vulk.device, Vulk.colorImageMemory, NULL );
 
     vkDestroyImageView( Vulk.device, Vulk.depthImageView, NULL );
     vkDestroyImage( Vulk.device, Vulk.depthImage, NULL );
@@ -2436,6 +2663,8 @@ void createUniformBuffers
 (
     uint32_t width,
     uint32_t height,
+    uint32_t mipLevels,
+    VkSampleCountFlagBits numSamples,
     VkFormat format,
     VkImageTiling tiling,
     VkImageUsageFlags usage,
@@ -2450,14 +2679,15 @@ void createUniformBuffers
     imageInfo.extent.width = (uint32_t)(width);
     imageInfo.extent.height = (uint32_t)(height);
     imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
+    imageInfo.mipLevels = mipLevels;
     imageInfo.arrayLayers = 1;
     imageInfo.format = format;
     imageInfo.tiling = tiling;
+    imageInfo.samples =numSamples;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
     imageInfo.usage = usage;
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+
     imageInfo.flags = 0;
 
     if ( vkCreateImage( Vulk.device, &imageInfo, NULL, image ) != VK_SUCCESS )
@@ -2490,7 +2720,7 @@ void createUniformBuffers
     uint32_t imageIndex
 )
 {
-    uint32_t vertices_size = 8;
+
 
     VkCommandBufferBeginInfo beginInfo = {0};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
@@ -2526,7 +2756,7 @@ void createUniformBuffers
     VkBuffer vertexBuffers[] = { Vulk.vertexBuffer };
     VkDeviceSize offsets[] = { 0 };
 
-    size_t indices_size = 12;
+
     vkCmdBindVertexBuffers( commandBuffer, 0, 1, vertexBuffers, offsets );
     vkCmdBindIndexBuffer( commandBuffer, Vulk.indexBuffer, 0, VK_INDEX_TYPE_UINT32 );
     vkCmdBindDescriptorSets( commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, Vulk.pipelineLayout, 0, 1, &Vulk.descriptorSets[currentFrame], 0, NULL );
@@ -2561,9 +2791,12 @@ VkImageView createImageView
 (
     VkImage image,
     VkFormat format,
-    VkImageAspectFlags aspectFlags
+    VkImageAspectFlags aspectFlags,
+    uint32_t mipLevels
 )
 {
+
+
     VkImageViewCreateInfo viewInfo = {0};
     viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     viewInfo.image = image;
@@ -2571,7 +2804,7 @@ VkImageView createImageView
     viewInfo.format = format;
     viewInfo.subresourceRange.aspectMask = aspectFlags;
     viewInfo.subresourceRange.baseMipLevel = 0;
-    viewInfo.subresourceRange.levelCount = 1;
+    viewInfo.subresourceRange.levelCount = mipLevels;
     viewInfo.subresourceRange.baseArrayLayer = 0;
     viewInfo.subresourceRange.layerCount = 1;
 
@@ -2670,6 +2903,7 @@ VkImageView createImageView
     cleanupSwapChain();
     createSwapChain();
     createImageViews();
+    createColorResources();
     createDepthResources();
     createFramebuffers();
 }
@@ -2780,6 +3014,7 @@ VkPresentModeKHR chooseSwapPresentMode
 
 
 int main() {
+
    run();
 
    return 0;
